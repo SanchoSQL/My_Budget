@@ -37,6 +37,7 @@ ncu_df['Description'] = ncu_df['Description'].astype(str).str.upper() + ' ' + nc
 ncu_df['Amount'] = np.where(ncu_df['Amount Debit'].notnull(), ncu_df['Amount Debit'], ncu_df['Amount Credit'])
 ncu_df.drop(['Transaction Number','Check Number','Memo','Amount Debit','Amount Credit','Balance','Fees  '], axis=1, inplace=True)     
 
+
 # Clean up cashapp_df
 # format the date
 cashapp_df['Date'] = cashapp_df['Date'].str.replace('CST|CDT', '', regex=True) # remove tz for formatting
@@ -54,8 +55,6 @@ cashapp_df['Amount'] = pd.to_numeric(cashapp_df['Amount'], errors='coerce')     
 #drop columns
 cashapp_df.drop(['Transaction ID','Currency','Asset Type','Asset Price','Asset Amount','Account','Fee',
           'Status','Name of sender/receiver','Notes','Transaction Type','Net Amount'], axis=1, inplace=True)     
-#filter out items prior to 2023
-cashapp_df = cashapp_df[pd.to_datetime(cashapp_df['Date']).dt.year >= 2023]
 
 #print(cashapp_df.head(3))
 
@@ -69,6 +68,10 @@ cashapp_df['Source Updated'] = cashapp_upd_dt
 
 # Combine the dataframes into a single dataframe
 df = pd.concat([chase_df, ncu_df, cashapp_df], ignore_index=True)
+#filter out items prior to 2023
+df = df[pd.to_datetime(df['Date']) >= '2022-10-01']
+#df = df[pd.to_datetime(df['Date']).dt.year >= 2023]
+
 
 # Define the categories
 FastFood = 'TREATS|STARBUCKS|SWIG|KONA ICE|DONUTBOX|DELISH|SMASHBURGER|POPEYES|DOMINO|PANERA|BURGERS|BURGER|TACO|MCDONALD|\
@@ -153,8 +156,15 @@ else 'BAHAMA BUCKS' if 'BAHAMA BUCKS' in x
 else 'MISC') 
 
 df['Date'] = pd.to_datetime(df['Date'])
+
+df['week'] = df['Date'].dt.isocalendar().week
+
+
 df['year_month'] = df['Date'].dt.strftime('%Y-%m')
 df['month_day'] = df['Date'].dt.strftime('%m-%d')
+df['year_month_day'] = df['Date'].dt.strftime('%Y-%m-%d')
+
+
 
 # This is a test to confirm the fast food category does not contain certain CC sub-categories
 
@@ -164,30 +174,125 @@ df_filtered2test
 output = "R:/Dropbox/BillCSV/TEST3.xlsx"
 df.to_excel(output)
 
+df.info()
+
 # This will create a df for monthly income
 
 Income_Table = df.query("Amount > 0").groupby('year_month')['Amount'].sum().reset_index(name ='sum')
 Income_Table
 
-# filter income from df and convert negative amounts 
+# Income over time
 
-df = df[df.Category != "Remove"] 
-df['Amount'] = df.Amount*(-1)  
+Income_Table['cumulative sum'] = Income_Table['sum'].cumsum()
+Income_Table = go.Figure(
+    data = go.Scatter(x = Income_Table["year_month"], y = Income_Table["cumulative sum"]),
+    layout = go.Layout(
+        title = go.layout.Title(text = "Income Over Time")
+    )
+)
+Income_Table.update_layout(
+    xaxis_title = "Date",
+    yaxis_title = "Net Worth (£)",
+    hovermode = 'x unified'
+    )
+Income_Table.update_xaxes(
+    tickangle = 45)
+Income_Table.show()
+
+# filter income from df and convert negative amounts, renamed to df_spending
+
+df_spending = df[df.Category != "Remove"] 
+df_spending = df_spending[df_spending["Category"].isin(["Remove","Income"]) == False]
+df_spending['Amount'] = df_spending.Amount*(-1)  
+
+df_spending.info()
+df_spending
+
+
+Expenses_Breakdown_Table = pd.pivot_table(df_spending, values = ['Amount'], index = ['Category', 'year_month'], aggfunc=sum).reset_index()
+Expenses_Breakdown_Table
+
+Expenses_Breakdown_Table.columns = [x.upper() for x in Expenses_Breakdown_Table.columns]
+
+Expenses_Breakdown_Chart = px.line(Expenses_Breakdown_Table, x='YEAR_MONTH', y="AMOUNT", title="Expenses Breakdown", color = 'CATEGORY')
+
+Expenses_Breakdown_Chart.update_yaxes(title='Expenses (£)', visible=True, showticklabels=True)
+
+Expenses_Breakdown_Chart.update_xaxes(title='Date', visible=True, showticklabels=True)
+
+Expenses_Breakdown_Chart.show()
+
 
 #categories = df.loc[:, 'Category'].unique()
 
-# create a table for each category
+# create a table for each category for graphs
 
-categories = df['Category'].unique()
+categories = df_spending['Category'].unique()
 dfs = {}
 for category in categories:
-    dfs[f"{category}_Table"] = df[df['Category'] == category].groupby('year_month')['Amount'].sum().reset_index(name=f"{category}_sum")
+    dfs[f"{category}_Table"] = df_spending[(df_spending['Category'] == category) & (df_spending['Amount'] > 0)].groupby('year_month')['Amount'].sum().reset_index(name=f"{category}_sum")
+for key in dfs:
+    exec(f"{key} = dfs['{key}']")
+    print(key)
+
+# by day
+
+categories = df_spending['Category'].unique()
+dfs = {}
+for category in categories:
+    dfs[f"{category}_Table_Day"] = df_spending[(df_spending['Category'] == category) & (df_spending['Amount'] > 0)].groupby('year_month_day')['Amount'].sum().reset_index(name=f"{category}_sum")
 for key in dfs:
     exec(f"{key} = dfs['{key}']")
     print(key)
 
 
-%whos DataFrame
-Credit_Cards_Table
+
+
+#%whos DataFrame #to view all datarames in memory
+# put tables into list
+
+expense_tbls = list(dfs.keys())
+expense_tbls 
+
+# merge all dfs; this needs to be done on the date which is an object
+#from functools import partial, reduce
+#Expenses_Monthly = reduce(lambda left,right: pd.merge(left,right,on=["year_month"],
+#                                            how="outer"), expense_tbls).fillna('void')
+#Expenses_Monthly
+
+Fast_Food_Table_Week
+
+# Test Graph
+
+fig = go.Figure([go.Scatter(x=Fast_Food_Table_Day['year_month_day'], y=Fast_Food_Table_Day['Fast_Food_sum'])])
+fig.show()
+
+fig = go.Figure([go.Scatter(x=Grocery_Table_Day['year_month_day'], y=Grocery_Table_Day['Grocery_sum'])])
+fig.show()
+
+
+
+# Fast Food over time
+
+Fast_Food_Table['cumulative sum'] = Fast_Food_Table['Fast_Food_sum'].cumsum()
+Fast_Food_Table = go.Figure(
+    data = go.Scatter(x = Fast_Food_Table["year_month"], y = Fast_Food_Table["cumulative sum"]),
+    layout = go.Layout(
+        title = go.layout.Title(text = "Fast Food Spending over time")
+    )
+)
+Fast_Food_Table.update_layout(
+    xaxis_title = "Date",
+    yaxis_title = "Net Worth (£)",
+    hovermode = 'x unified'
+    )
+Fast_Food_Table.update_xaxes(
+    tickangle = 45)
+Fast_Food_Table.show()
+
+fig = px.sunburst(df_spending, path=['Category'], values='Amount', color='Category')
+fig.show()
+
+
 
 
